@@ -293,10 +293,10 @@ if __name__ == '__main__':
     # The main execution block is now for scheduling
     scheduler = BlockingScheduler(timezone="Asia/Bangkok") # Use a specific timezone, e.g., for Thailand
 
-    # Schedule the job to run at 8:00, 12:00, and 16:00
-    scheduler.add_job(run_full_job, 'cron', hour='8,12,16', minute='0')
+    # Schedule the job to run at 1:00, 4:00, 8:00, 12:00, 16:00 and 21:00
+    scheduler.add_job(run_full_job, 'cron', hour='1,4,8,12,16,21', minute='0')
 
-    print("Scheduler started. The job will run at 8:00, 12:00, and 16:00 (Bangkok time).")
+    print("Scheduler started. The job will run at 1:00, 4:00, 8:00, 12:00, 16:00 and 21:00 (Bangkok time).")
     print("Press Ctrl+C to exit.")
 
     try:
