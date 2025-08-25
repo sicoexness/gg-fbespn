@@ -108,8 +108,14 @@ def post_to_facebook(article_data):
         print(f"Posting to Facebook page: {page_id}")
         graph = facebook.GraphAPI(access_token)
 
-        # Combine headline and body for the post message
-        message = f"{article_data['headline_th']}\n\n{article_data['body_th_styled']}"
+        # Combine headline and body for the post message, and add the attribution
+        message = f"""{article_data['headline_th']}
+
+{article_data['body_th_styled']}
+
+---
+ขอขอบคุณภาพข่าวจาก : ESPN
+ลิงค์ข่าว : {article_data['url']}"""
 
         # The image_url is the URL of the image we scraped from ESPN
         # We need to download the image content first to upload it
@@ -213,8 +219,9 @@ def run_full_job():
 
         # Check if translation was successful before posting
         if styled_result and styled_result.get('headline_th') != article.get('headline'):
-            # Add the image_url for the posting function
+            # Add the image_url and original article url for the posting function
             styled_result['image_url'] = article['image_url']
+            styled_result['url'] = article['url']
             post_to_facebook(styled_result)
         else:
             print(f"Skipping Facebook post for '{article['headline']}' due to translation/styling failure.")
