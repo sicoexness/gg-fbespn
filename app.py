@@ -12,6 +12,22 @@ load_dotenv()
 from apscheduler.schedulers.blocking import BlockingScheduler
 from datetime import datetime
 
+# --- Constants and Setup ---
+POSTED_ARTICLES_FILE = "posted_articles.txt"
+
+def load_posted_ids():
+    """Reads the file of posted article IDs and returns them as a set."""
+    if not os.path.exists(POSTED_ARTICLES_FILE):
+        return set()
+    with open(POSTED_ARTICLES_FILE, 'r') as f:
+        # Read lines, strip whitespace, and filter out any empty lines
+        return set(line.strip() for line in f if line.strip())
+
+def save_posted_id(article_id):
+    """Appends a new article ID to the history file."""
+    with open(POSTED_ARTICLES_FILE, 'a') as f:
+        f.write(str(article_id) + "\n")
+
 # --- Gemini Configuration ---
 # Configure the generative AI model
 try:
@@ -108,13 +124,20 @@ def post_to_facebook(article_data):
         print(f"Posting to Facebook page: {page_id}")
         graph = facebook.GraphAPI(access_token)
 
+        # Determine the source for attribution
+        source = article_data.get('source', 'ESPN') # Default to ESPN
+        if source == 'Yahoo':
+            source_text = 'Yahoo Sport'
+        else:
+            source_text = 'ESPN'
+
         # Combine headline and body for the post message, and add the attribution
         message = f"""{article_data['headline_th']}
 
 {article_data['body_th_styled']}
 
 ---
-ขอขอบคุณภาพข่าวจาก : ESPN
+ขอขอบคุณภาพข่าวจาก : {source_text}
 ลิงค์ข่าว : {article_data['url']}"""
 
         # The image_url is the URL of the image we scraped from ESPN
@@ -193,101 +216,134 @@ def get_article_content(article_url):
 def run_full_job():
     """
     This is the main job that will be scheduled.
-    It scrapes 5 articles, translates/styles them, and posts them to Facebook.
+    It scrapes news from multiple leagues, gets the 5 newest unique articles,
+    translates/styles them, and posts them to Facebook.
     """
     print(f"--- Running scheduled job at {datetime.now()} ---")
 
-    # Check for credentials at the start of the job
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    fb_token = os.getenv("FACEBOOK_ACCESS_TOKEN")
-    fb_page_id = os.getenv("FACEBOOK_PAGE_ID")
-
-    if not all([gemini_key, fb_token, fb_page_id]) or gemini_key == "DUMMY_KEY":
-        print("Job aborted: Missing one or more API keys (GEMINI, FACEBOOK_TOKEN, FACEBOOK_PAGE_ID).")
+    # Check for credentials
+    if not all([os.getenv("GEMINI_API_KEY"), os.getenv("FACEBOOK_ACCESS_TOKEN"), os.getenv("FACEBOOK_PAGE_ID")]):
+        print("Job aborted: Missing one or more API keys.")
         return
 
-    articles_to_process = get_espn_news() # This function already gets up to 5
+    # 1. Load history of posted articles
+    posted_ids = load_posted_ids()
+    print(f"Loaded {len(posted_ids)} previously posted article IDs from '{POSTED_ARTICLES_FILE}'.")
 
-    if not articles_to_process:
-        print("No articles found to process. Job finished.")
-        return
+    # 2. Fetch raw article data from all sources
+    raw_articles = get_espn_news()
 
-    print(f"Processing {len(articles_to_process)} articles...")
-    for article in articles_to_process:
-        print(f"\n--- Processing article: {article['headline']} ---")
-        styled_result = translate_and_style_article(article)
+    # 3. Filter out videos and sort by newest first
+    articles_no_videos = [a for a in raw_articles if a.get('type') != 'Media']
 
-        # Check if translation was successful before posting
-        if styled_result and styled_result.get('headline_th') != article.get('headline'):
-            # Add the image_url and original article url for the posting function
-            styled_result['image_url'] = article['image_url']
-            styled_result['url'] = article['url']
-            post_to_facebook(styled_result)
+    # The 'published' field is a string like "2025-08-25T21:15:26Z"
+    # We can sort directly on this string.
+    sorted_articles = sorted(articles_no_videos, key=lambda x: x.get('published', ''), reverse=True)
+
+    print(f"Found {len(sorted_articles)} valid articles to process. Now checking for duplicates.")
+
+    new_posts_made = 0
+    for article_summary in sorted_articles:
+        # Stop after posting 5 new articles
+        if new_posts_made >= 5:
+            print("Successfully posted 5 new articles. Ending job run.")
+            break
+
+        # 4. Check for duplicates
+        article_id = str(article_summary.get('id'))
+        if article_id in posted_ids:
+            # This is expected for most articles, so we don't print every time
+            # print(f"Skipping duplicate article: \"{article_summary.get('headline')}\"")
+            continue
+
+        print(f"\n--- Found new article to process from {article_summary.get('league')}: \"{article_summary.get('headline')}\" ---")
+
+        # 5. Scrape full content for the new article
+        article_url = article_summary.get('links', {}).get('web', {}).get('href')
+        if not article_url:
+            print("Skipping article due to missing URL.")
+            continue
+
+        full_content = get_article_content(article_url)
+        if not full_content:
+            print(f"Skipping article because no content could be scraped from URL: {article_url}")
+            continue
+
+        # 6. Prepare the final article object for processing
+        image_url = None
+        images = article_summary.get('images', [])
+        if images:
+            image_url = images[0].get('url')
+
+        final_article = {
+            'id': article_id,
+            'headline': article_summary.get('headline'),
+            'url': article_url,
+            'image_url': image_url,
+            'body': full_content,
+            'source': article_summary.get('source') # Pass the source for attribution
+        }
+
+        # 7. Translate and style
+        styled_result = translate_and_style_article(final_article)
+
+        # 8. Post to Facebook
+        if styled_result and styled_result.get('headline_th') != final_article.get('headline'):
+            styled_result['image_url'] = final_article['image_url']
+            styled_result['url'] = final_article['url']
+            styled_result['source'] = final_article['source']
+
+            post_successful = post_to_facebook(styled_result)
+
+            if post_successful:
+                save_posted_id(article_id)
+                print(f"Successfully saved article ID {article_id} to history.")
+                new_posts_made += 1
         else:
-            print(f"Skipping Facebook post for '{article['headline']}' due to translation/styling failure.")
+            print(f"Skipping Facebook post for '{final_article['headline']}' due to translation/styling failure.")
+
+    if new_posts_made == 0:
+        print("No new articles were found to post in this run.")
 
     print(f"--- Scheduled job finished at {datetime.now()} ---")
 
 
 def get_espn_news():
     """
-    Fetches news articles from the unofficial ESPN API, filters out videos,
-    and scrapes the full content of each article.
+    Fetches news articles for multiple leagues from the unofficial ESPN API.
     """
-    api_url = "http://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/news?limit=15" # Fetch more to ensure we get 5 non-videos
-    scraped_articles = []
+    leagues = {
+        'eng.1': 'Premier League',
+        'esp.1': 'La Liga',
+        'ger.1': 'Bundesliga',
+        'ita.1': 'Serie A'
+    }
+    all_articles = []
 
-    print("Fetching news list from ESPN API...")
-    try:
-        response = requests.get(api_url)
-        response.raise_for_status()
-        data = response.json()
+    print("Fetching news from ESPN API for all specified leagues...")
+    for league_code, league_name in leagues.items():
+        api_url = f"http://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/news"
+        try:
+            response = requests.get(api_url)
+            response.raise_for_status()
+            data = response.json()
 
-        api_articles = data.get('articles', [])
-        print(f"Found {len(api_articles)} items from API.")
+            api_articles = data.get('articles', [])
+            print(f"Found {len(api_articles)} articles for {league_name}.")
 
-        for article in api_articles:
-            if len(scraped_articles) >= 5:
-                print("Collected 5 articles. Stopping.")
-                break
+            # Add source and league info to each article
+            for article in api_articles:
+                article['source'] = 'ESPN'
+                article['league'] = league_name
 
-            if article.get('type') == 'Media':
-                print(f"Skipping media item: \"{article.get('headline')}\"")
-                continue
+            all_articles.extend(api_articles)
 
-            headline = article.get('headline')
-            description = article.get('description')
-            article_url = article.get('links', {}).get('web', {}).get('href')
+        except requests.exceptions.RequestException as e:
+            print(f"Could not fetch news for {league_name}. Error: {e}")
+            continue # Continue to the next league if one fails
 
-            image_url = None
-            images = article.get('images', [])
-            if images:
-                image_url = images[0].get('url')
-
-            if not all([headline, article_url, image_url]):
-                print(f"Skipping article \"{headline}\" due to missing data.")
-                continue
-
-            full_content = get_article_content(article_url)
-
-            if not full_content:
-                print(f"Skipping article \"{headline}\" because no content could be scraped.")
-                continue
-
-            scraped_articles.append({
-                'headline': headline,
-                'url': article_url,
-                'image_url': image_url,
-                'body': full_content
-            })
-            print(f"Successfully scraped: \"{headline}\"")
-
-        print(f"\nSuccessfully scraped {len(scraped_articles)} complete articles.")
-        return scraped_articles
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching news from ESPN API: {e}")
-        return []
+    print(f"Found a total of {len(all_articles)} articles from all ESPN leagues.")
+    return all_articles
 
 if __name__ == '__main__':
     # The main execution block is now for scheduling
