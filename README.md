@@ -1,16 +1,21 @@
-# ESPN Football News Scraper & Facebook Poster
+# ESPN Football News Bot with Web Control Panel
 
-This project is an automated bot that scrapes football news from ESPN, translates it into Thai with a fun and engaging style using the Gemini API, and automatically posts it to a Facebook Page.
+This project is an automated bot that scrapes football news from multiple European leagues via the ESPN API, translates it into Thai with a fun and engaging style using the Gemini API, and automatically posts it to a Facebook Page.
+
+This new version includes a full web-based control panel for easy management.
 
 ## Features
 
--   **Web Scraping**: Fetches the latest 5 news articles from the English Premier League section of ESPN.
--   **Video Filtering**: Intelligently skips any news items that are videos.
--   **AI Translation & Styling**: Uses Google's Gemini API to:
-    1.  Translate articles from English to Thai.
-    2.  Rewrite the content in a fun, informal, and engaging tone perfect for social media.
--   **Facebook Automation**: Posts the styled headline, body, and the original article image directly to a specified Facebook Page.
--   **Scheduling**: Runs automatically at 8:00 AM, 12:00 PM, and 4:00 PM (Bangkok time) every day.
+-   **Multi-League Scraping**: Fetches news from the Premier League, La Liga, Bundesliga, and Serie A.
+-   **Content Aggregation**: Combines news from all leagues and posts the 5 absolute latest articles.
+-   **Deduplication**: Keeps track of posted articles in `posted_articles.txt` to prevent posting the same news twice.
+-   **AI Translation & Styling**: Uses Google's Gemini API for translation and styling.
+-   **Facebook Automation**: Posts content to a Facebook Page.
+-   **Web Control Panel**: A user interface to:
+    -   Configure all API Keys (`Gemini`, `Facebook`).
+    -   View a live log of the bot's actions.
+    -   Manually trigger the bot to run at any time.
+-   **Scheduling**: Runs automatically at 01:00, 04:00, 08:00, 12:00, 16:00, and 21:00 (Bangkok time).
 
 ## Setup and Installation
 
@@ -31,46 +36,35 @@ This project is an automated bot that scrapes football news from ESPN, translate
     pip install -r requirements.txt
     ```
 
-## Environment Variables
-
-This project requires API keys and credentials to function. Create a file named `.env` in the root directory and add the following variables. You can use the `.env.example` file as a template.
-
-```
-# Get from Google AI Studio (https://aistudio.google.com/app/apikey)
-GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
-
-# Get from Meta for Developers dashboard for your app/page
-# Requires pages_read_engagement and pages_manage_posts permissions
-FACEBOOK_ACCESS_TOKEN="YOUR_FACEBOOK_PAGE_ACCESS_TOKEN"
-FACEBOOK_PAGE_ID="YOUR_FACEBOOK_PAGE_ID"
-```
-
 ## Running Locally
 
-To run the scheduler locally for testing or development, simply run the `app.py` script from your terminal:
-
-```bash
-python app.py
-```
-
-The script will run one job immediately and then start the schedule. Press `Ctrl+C` to stop the scheduler.
+1.  **Run the Flask application:**
+    ```bash
+    python app.py
+    ```
+2.  **Open your web browser** and go to `http://127.0.0.1:5001`.
+3.  **Configure API Keys:** Use the web form to enter your Gemini and Facebook API keys and Page ID. Click "Save Settings".
+4.  **Run the bot:** You can either wait for the next scheduled time or click the "Run Job Manually" button to test it immediately.
 
 ## Deployment on Render.com
 
-This project is ready to be deployed to [Render.com](https://render.com/).
+This project is ready to be deployed to [Render.com](https://render.com/) as a **Web Service**.
 
-1.  **Push to GitHub:** Create a new repository on GitHub and push your project code to it.
+1.  **Push to GitHub:** Make sure your latest code is on a GitHub repository.
 
 2.  **Create a New Service on Render:**
     -   Log in to your Render dashboard.
-    -   Click "New +" and select "Background Worker".
+    -   Click "New +" and select **"Web Service"**.
     -   Connect your GitHub repository.
     -   Give your service a name.
 
 3.  **Configure the Service:**
-    -   **Start Command:** Render will automatically detect the `Procfile` and use `python app.py` as the start command.
-    -   **Instance Type:** The free tier is likely sufficient to start.
-    -   **Environment Variables:** Under the "Environment" tab, click "Add Environment Variable" or "Add Secret File" to add the three required variables (`GEMINI_API_KEY`, `FACEBOOK_ACCESS_TOKEN`, `FACEBOOK_PAGE_ID`) with their corresponding values. This is the most important step for the deployed application to work.
+    -   **Environment:** Python
+    -   **Start Command:** Render will automatically detect the `Procfile` and use `gunicorn app:app`.
+    -   **Instance Type:** The free tier is likely sufficient.
 
 4.  **Deploy:**
-    -   Click "Create Background Worker". Render will automatically pull your code, install dependencies from `requirements.txt`, and start the worker using the `Procfile` command. The scheduler will then be live and will post at the scheduled times.
+    -   Click "Create Web Service".
+    -   After the service is deployed, go to the URL provided by Render (e.g., `https://your-app-name.onrender.com`).
+    -   Use the web UI to enter and save your API keys for the first time. The bot will then be fully operational.
+    -   **Note:** Render's free tier web services will "spin down" after a period of inactivity. They will spin up again on the next HTTP request. This means the scheduler might not run reliably on the free tier if the app is inactive. For guaranteed execution, you may need a paid plan or use Render's "Background Worker" or "Cron Job" services for the scheduler part, which is a more advanced setup.
