@@ -11,8 +11,9 @@ from datetime import datetime
 # Load environment variables from .env file
 load_dotenv()
 
-# --- Constants and Setup ---
+# --- Constants and State Management ---
 POSTED_ARTICLES_FILE = "posted_articles.txt"
+current_key_index = 0
 
 def load_posted_ids():
     if not os.path.exists(POSTED_ARTICLES_FILE):
@@ -24,40 +25,57 @@ def save_posted_id(article_id):
     with open(POSTED_ARTICLES_FILE, 'a') as f:
         f.write(str(article_id) + "\n")
 
-def configure_gemini():
-    """Configures the Gemini API with key from environment variables."""
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_api_key:
-        print("Warning: GEMINI_API_KEY not found. Translation will fail.")
-        return False
-    try:
-        genai.configure(api_key=gemini_api_key)
-        return True
-    except Exception as e:
-        print(f"Error configuring Gemini: {e}")
-        return False
-
 def translate_and_style_article(article):
+    """
+    Translates and styles an article, rotating through API keys on quota failure.
+    """
+    global current_key_index
     headline = article['headline']
     body = article['body']
-    print(f"Translating and styling: \"{headline}\"")
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = f"""Act as a friendly and funny Thai football blogger. Your goal is to take a news article and make it exciting for Thai football fans.
-        Here is the article: Headline: "{headline}" Body: {body}
-        Please perform the following tasks:
-        1. Translate the entire article (headline and body) into Thai.
-        2. Rewrite the translated article in a fun, engaging, and informal style.
-        3. Structure your response as a JSON object with two keys: "headline_th" and "body_th_styled".
-        """
-        response = model.generate_content(prompt)
-        cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "")
-        styled_content = json.loads(cleaned_response_text)
-        print("Successfully translated and styled the article.")
-        return styled_content
-    except Exception as e:
-        print(f"An error occurred with the Gemini API: {e}")
+
+    keys = [
+        os.getenv("GEMINI_API_KEY_1"),
+        os.getenv("GEMINI_API_KEY_2"),
+        os.getenv("GEMINI_API_KEY_3")
+    ]
+
+    valid_keys = [key for key in keys if key]
+    if not valid_keys:
+        print("Skipping translation: No Gemini API keys found in .env file.")
         return None
+
+    start_index = current_key_index
+    for i in range(len(valid_keys)):
+        # Start from the current key and loop around
+        key_to_try_index = (start_index + i) % len(valid_keys)
+        api_key = valid_keys[key_to_try_index]
+
+        try:
+            genai.configure(api_key=api_key)
+            print(f"Translating \"{headline}\" using API Key #{key_to_try_index + 1}...")
+
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            prompt = f"""Act as a friendly and funny Thai football blogger... [PROMPT HIDDEN FOR BREVITY]"""
+
+            response = model.generate_content(prompt)
+            cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "")
+            styled_content = json.loads(cleaned_response_text)
+
+            print(f"Successfully translated using API Key #{key_to_try_index + 1}.")
+            current_key_index = key_to_try_index # Update the index to the key that worked
+            return styled_content
+
+        except Exception as e:
+            if "429" in str(e) and "quota" in str(e).lower():
+                print(f"API Key #{key_to_try_index + 1} has exceeded its quota. Trying next key...")
+                continue
+            else:
+                print(f"An unexpected error occurred with Gemini API Key #{key_to_try_index + 1}: {e}")
+                return None
+
+    print("All available Gemini API keys have exceeded their quotas. Skipping translation.")
+    current_key_index = len(valid_keys) # Mark all keys as used
+    return None
 
 def post_to_facebook(article_data):
     page_id = os.getenv("FACEBOOK_PAGE_ID")
@@ -123,10 +141,11 @@ def get_espn_news():
     return all_articles
 
 def run_full_job():
+    global current_key_index
+    current_key_index = 0 # Reset to the first key for every new job run
     print(f"\n--- Running scheduled job at {datetime.now()} ---")
-    if not configure_gemini():
-        print("Job aborted due to Gemini configuration error.")
-        return
+    print("API Key index reset to 0.")
+    # The configure_gemini() call is no longer needed here, it will be handled by the translation function
     posted_ids = load_posted_ids()
     print(f"Loaded {len(posted_ids)} previously posted article IDs.")
     raw_articles = get_espn_news()
