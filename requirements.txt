@@ -4,5 +4,3 @@ google-generativeai
 apscheduler
 facebook-sdk
 python-dotenv
-Flask
-gunicorn
