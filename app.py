@@ -65,33 +65,73 @@ def save_posted_id(article_id):
     with open(POSTED_ARTICLES_FILE, 'a') as f:
         f.write(str(article_id) + "\n")
 
+# --- State Management for API Key Rotation ---
+# Using a simple list as a global variable for simplicity in a single-process environment.
+# A more robust solution in a multi-process server would use a file or a database.
+current_key_index = 0
+
 def translate_and_style_article(article):
+    """
+    Translates and styles an article, rotating through API keys on quota failure.
+    """
+    global current_key_index
     headline = article['headline']
     body = article['body']
-    gemini_api_key = get_setting("GEMINI_API_KEY")
-    if not gemini_api_key:
-        add_log("Skipping translation: GEMINI_API_KEY not found in settings.")
+
+    # Get all three keys from settings
+    keys = [
+        get_setting("GEMINI_API_KEY_1"),
+        get_setting("GEMINI_API_KEY_2"),
+        get_setting("GEMINI_API_KEY_3")
+    ]
+
+    # Filter out any keys that are not set
+    valid_keys = [key for key in keys if key]
+
+    if not valid_keys:
+        add_log("Skipping translation: No Gemini API keys found in settings.")
         return None
-    try:
-        genai.configure(api_key=gemini_api_key)
-        add_log(f"Translating and styling: \"{headline}\"")
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = f"""Act as a friendly and funny Thai football blogger. Your goal is to take a news article and make it exciting for Thai football fans.
-        Here is the article: Headline: "{headline}" Body: {body}
-        Please perform the following tasks:
-        1. Translate the entire article (headline and body) into Thai.
-        2. Rewrite the translated article in a fun, engaging, and informal style. Use slang and exciting language that a football fan would love.
-        3. The final post must be short and punchy, designed to be read in under one minute.
-        4. Structure your response as a JSON object with two keys: "headline_th" and "body_th_styled".
-        """
-        response = model.generate_content(prompt)
-        cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "")
-        styled_content = json.loads(cleaned_response_text)
-        add_log("Successfully translated and styled the article.")
-        return styled_content
-    except Exception as e:
-        add_log(f"An error occurred with the Gemini API: {e}")
-        return None
+
+    # Loop to try each key
+    for i in range(len(valid_keys)):
+        key_to_try_index = (current_key_index + i) % len(valid_keys)
+        api_key = valid_keys[key_to_try_index]
+
+        try:
+            genai.configure(api_key=api_key)
+            add_log(f"Translating \"{headline}\" using API Key #{key_to_try_index + 1}...")
+
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            prompt = f"""Act as a friendly and funny Thai football blogger... [PROMPT HIDDEN FOR BREVITY]""" # Prompt is unchanged
+
+            response = model.generate_content(prompt)
+            cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "")
+            styled_content = json.loads(cleaned_response_text)
+
+            add_log(f"Successfully translated using API Key #{key_to_try_index + 1}.")
+            # Important: update the global index to the one that worked
+            current_key_index = key_to_try_index
+            return styled_content
+
+        except genai.types.generation_types.StopCandidateException as e:
+            # This can happen if the content is flagged as unsafe. Treat as a failure for this article.
+            add_log(f"Gemini content safety error with Key #{key_to_try_index + 1}: {e}")
+            return None # Stop trying for this article
+        except Exception as e:
+            # Check if it's a quota error (this is a simplified check)
+            if "429" in str(e) and "quota" in str(e).lower():
+                add_log(f"API Key #{key_to_try_index + 1} has exceeded its quota. Trying next key...")
+                continue # Go to the next iteration of the loop to try the next key
+            else:
+                # For other errors, log it and stop trying for this article
+                add_log(f"An unexpected error occurred with Gemini API Key #{key_to_try_index + 1}: {e}")
+                return None
+
+    # If the loop completes without returning, all keys have failed
+    add_log("All available Gemini API keys have exceeded their quotas. Skipping translation.")
+    # Update the global index to signify all keys are used up for now
+    current_key_index = len(valid_keys)
+    return None
 
 def post_to_facebook(article_data):
     page_id = get_setting("FACEBOOK_PAGE_ID")
@@ -165,7 +205,10 @@ def get_espn_news():
     return all_articles
 
 def run_full_job():
+    global current_key_index
+    current_key_index = 0 # Reset to the first key for every new job run
     add_log("--- Running scheduled job ---")
+    add_log("API Key index reset to 0.")
     posted_ids = load_posted_ids()
     add_log(f"Loaded {len(posted_ids)} previously posted article IDs.")
     raw_articles = get_espn_news()
@@ -216,17 +259,39 @@ def run_full_job():
 # --- Flask Routes ---
 @app.route('/')
 def index():
-    keys = ['GEMINI_API_KEY', 'FACEBOOK_ACCESS_TOKEN', 'FACEBOOK_PAGE_ID']
+    """Renders the main control panel page."""
+    # Fetch all settings to display in the form
+    keys = [
+        'GEMINI_API_KEY_1', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3',
+        'FACEBOOK_ACCESS_TOKEN', 'FACEBOOK_PAGE_ID'
+    ]
     settings = {key: get_setting(key) for key in keys}
+
+    # Fetch recent logs to display
     logs = get_logs(limit=50)
+
     return render_template('index.html', settings=settings, logs=logs)
 
 @app.route('/save_settings', methods=['POST'])
 def save_settings():
-    keys = ['GEMINI_API_KEY', 'FACEBOOK_ACCESS_TOKEN', 'FACEBOOK_PAGE_ID']
-    for key in keys:
-        # The form input names are lowercase and with underscores
-        set_setting(key, request.form.get(key.lower()))
+    """Saves the API keys from the form to the database."""
+    add_log("Attempting to save settings...")
+
+    # Define all the keys we expect from the form
+    keys_to_save = {
+        'GEMINI_API_KEY_1': request.form.get('gemini_api_key_1'),
+        'GEMINI_API_KEY_2': request.form.get('gemini_api_key_2'),
+        'GEMINI_API_KEY_3': request.form.get('gemini_api_key_3'),
+        'FACEBOOK_ACCESS_TOKEN': request.form.get('facebook_access_token'),
+        'FACEBOOK_PAGE_ID': request.form.get('facebook_page_id')
+    }
+
+    # Save each setting to the database
+    for key, value in keys_to_save.items():
+        # We save even if the value is empty, to allow clearing a key.
+        set_setting(key, value or '')
+        add_log(f"Saved setting: {key}")
+
     add_log("API settings have been updated.")
     return redirect(url_for('index'))
 

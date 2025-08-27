@@ -105,8 +105,16 @@
         <div class="section">
             <h2>// System Configuration</h2>
             <form action="/save_settings" method="post">
-                <label for="gemini_api_key">> GEMINI_API_KEY</label>
-                <input type="text" id="gemini_api_key" name="gemini_api_key" value="{{ settings.GEMINI_API_KEY or '' }}">
+                <label for="gemini_api_key_1">> GEMINI_API_KEY_1</label>
+                <input type="text" id="gemini_api_key_1" name="gemini_api_key_1" value="{{ settings.GEMINI_API_KEY_1 or '' }}">
+
+                <label for="gemini_api_key_2">> GEMINI_API_KEY_2 (Backup)</label>
+                <input type="text" id="gemini_api_key_2" name="gemini_api_key_2" value="{{ settings.GEMINI_API_KEY_2 or '' }}">
+
+                <label for="gemini_api_key_3">> GEMINI_API_KEY_3 (Backup)</label>
+                <input type="text" id="gemini_api_key_3" name="gemini_api_key_3" value="{{ settings.GEMINI_API_KEY_3 or '' }}">
+
+                <hr style="border-color: #0a0; border-style: dashed; margin: 20px 0;">
 
                 <label for="facebook_access_token">> FACEBOOK_ACCESS_TOKEN</label>
                 <input type="text" id="facebook_access_token" name="facebook_access_token" value="{{ settings.FACEBOOK_ACCESS_TOKEN or '' }}">
