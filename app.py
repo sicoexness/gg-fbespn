@@ -5,6 +5,7 @@ import json
 from dotenv import load_dotenv
 import facebook
 from apscheduler.schedulers.blocking import BlockingScheduler
+import time
 from datetime import datetime
 
 # Load environment variables from .env file
@@ -210,6 +211,8 @@ def run_full_job():
                 save_posted_image_url(image_url)
                 print(f"Saved article ID {article_id} and image URL to history.")
                 new_posts_made += 1
+                print("Waiting for 5 seconds before next API call to avoid rate limiting...")
+                time.sleep(5)
     print("--- Scheduled job finished ---")
 
 if __name__ == '__main__':
