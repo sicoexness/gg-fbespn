@@ -12,6 +12,7 @@ load_dotenv()
 
 # --- Constants and Setup ---
 POSTED_ARTICLES_FILE = "posted_articles.txt"
+POSTED_IMAGES_FILE = "posted_images.txt"
 
 def load_posted_ids():
     if not os.path.exists(POSTED_ARTICLES_FILE):
@@ -22,6 +23,18 @@ def load_posted_ids():
 def save_posted_id(article_id):
     with open(POSTED_ARTICLES_FILE, 'a') as f:
         f.write(str(article_id) + "\n")
+
+def load_posted_image_urls():
+    """Reads the file of posted image URLs and returns them as a set."""
+    if not os.path.exists(POSTED_IMAGES_FILE):
+        return set()
+    with open(POSTED_IMAGES_FILE, 'r') as f:
+        return set(line.strip() for line in f if line.strip())
+
+def save_posted_image_url(image_url):
+    """Appends a new image URL to the history file."""
+    with open(POSTED_IMAGES_FILE, 'a') as f:
+        f.write(str(image_url) + "\n")
 
 def translate_and_style_article(article):
     """
@@ -128,7 +141,7 @@ def get_espn_news():
     all_articles = []
     print("Fetching news from ESPN API for all specified leagues...")
     for league_code, league_name in leagues.items():
-        api_url = f"http://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/news"
+        api_url = f"http://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/news?limit=3"
         try:
             response = requests.get(api_url)
             response.raise_for_status()
@@ -150,7 +163,9 @@ def run_full_job():
     print("API Key index reset to 0.")
     # The configure_gemini() call is no longer needed here, it will be handled by the translation function
     posted_ids = load_posted_ids()
-    print(f"Loaded {len(posted_ids)} previously posted article IDs.")
+    posted_image_urls = load_posted_image_urls()
+    print(f"Loaded {len(posted_ids)} posted article IDs and {len(posted_image_urls)} posted image URLs.")
+
     raw_articles = get_espn_news()
     articles_no_videos = [a for a in raw_articles if a.get('type') != 'Media']
     sorted_articles = sorted(articles_no_videos, key=lambda x: x.get('published', ''), reverse=True)
@@ -160,9 +175,23 @@ def run_full_job():
         if new_posts_made >= 5:
             print("Posted 5 new articles. Ending job run.")
             break
+
+        # Deduplication Check 1: Article ID
         article_id = str(article_summary.get('id'))
         if article_id in posted_ids:
             continue
+
+        # Prepare image URL for Deduplication Check 2
+        image_url = (article_summary.get('images', [{}])[0] or {}).get('url')
+        if not image_url:
+            print(f"Skipping article \"{article_summary.get('headline')}\" due to missing image URL.")
+            continue
+
+        # Deduplication Check 2: Image URL
+        if image_url in posted_image_urls:
+            print(f"Skipping article \"{article_summary.get('headline')}\" due to duplicate image URL.")
+            continue
+
         print(f"\n--- Processing new article from {article_summary.get('league')}: \"{article_summary.get('headline')}\" ---")
         article_url = article_summary.get('links', {}).get('web', {}).get('href')
         if not article_url:
@@ -170,7 +199,7 @@ def run_full_job():
         full_content = get_article_content(article_url)
         if not full_content:
             continue
-        image_url = (article_summary.get('images', [{}])[0] or {}).get('url')
+
         final_article = {'id': article_id, 'headline': article_summary.get('headline'), 'url': article_url, 'image_url': image_url, 'body': full_content, 'source': 'ESPN'}
         styled_result = translate_and_style_article(final_article)
         if styled_result:
@@ -178,6 +207,8 @@ def run_full_job():
             post_successful = post_to_facebook(styled_result)
             if post_successful:
                 save_posted_id(article_id)
+                save_posted_image_url(image_url)
+                print(f"Saved article ID {article_id} and image URL to history.")
                 new_posts_made += 1
     print("--- Scheduled job finished ---")
 
