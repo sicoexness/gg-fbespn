@@ -3,7 +3,6 @@ import requests
 from bs4 import BeautifulSoup
 import json
 from dotenv import load_dotenv
-import google.generativeai as genai
 import facebook
 from apscheduler.schedulers.blocking import BlockingScheduler
 from datetime import datetime
@@ -11,9 +10,8 @@ from datetime import datetime
 # Load environment variables from .env file
 load_dotenv()
 
-# --- Constants and State Management ---
+# --- Constants and Setup ---
 POSTED_ARTICLES_FILE = "posted_articles.txt"
-current_key_index = 0
 
 def load_posted_ids():
     if not os.path.exists(POSTED_ARTICLES_FILE):
@@ -27,55 +25,60 @@ def save_posted_id(article_id):
 
 def translate_and_style_article(article):
     """
-    Translates and styles an article, rotating through API keys on quota failure.
+    Translates and styles an article using the OpenRouter.ai API.
     """
-    global current_key_index
-    headline = article['headline']
-    body = article['body']
-
-    keys = [
-        os.getenv("GEMINI_API_KEY_1"),
-        os.getenv("GEMINI_API_KEY_2"),
-        os.getenv("GEMINI_API_KEY_3")
-    ]
-
-    valid_keys = [key for key in keys if key]
-    if not valid_keys:
-        print("Skipping translation: No Gemini API keys found in .env file.")
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        print("Skipping translation: OPENROUTER_API_KEY not found in .env file.")
         return None
 
-    start_index = current_key_index
-    for i in range(len(valid_keys)):
-        # Start from the current key and loop around
-        key_to_try_index = (start_index + i) % len(valid_keys)
-        api_key = valid_keys[key_to_try_index]
+    headline = article['headline']
+    body = article['body']
+    print(f"Translating and styling with OpenRouter: \"{headline}\"")
 
-        try:
-            genai.configure(api_key=api_key)
-            print(f"Translating \"{headline}\" using API Key #{key_to_try_index + 1}...")
+    # The same prompt as before, asking for a JSON object
+    prompt = f"""Act as a friendly and funny Thai football blogger. Your goal is to take a news article and make it exciting for Thai football fans.
+    Here is the article: Headline: "{headline}" Body: {body}
+    Please perform the following tasks:
+    1. Translate the entire article (headline and body) into Thai.
+    2. Rewrite the translated article in a fun, engaging, and informal style.
+    3. Structure your response as a JSON object with two keys: "headline_th" and "body_th_styled".
+    """
 
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            prompt = f"""Act as a friendly and funny Thai football blogger... [PROMPT HIDDEN FOR BREVITY]"""
+    try:
+        response = requests.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            data=json.dumps({
+                "model": "openai/gpt-3.5-turbo", # Using a standard, reliable model
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ]
+            })
+        )
+        response.raise_for_status() # Raise an exception for bad status codes
 
-            response = model.generate_content(prompt)
-            cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "")
-            styled_content = json.loads(cleaned_response_text)
+        # Extract the content from the response
+        response_data = response.json()
+        content = response_data['choices'][0]['message']['content']
 
-            print(f"Successfully translated using API Key #{key_to_try_index + 1}.")
-            current_key_index = key_to_try_index # Update the index to the key that worked
-            return styled_content
+        # The model should return a JSON string, so we parse it
+        styled_content = json.loads(content)
 
-        except Exception as e:
-            if "429" in str(e) and "quota" in str(e).lower():
-                print(f"API Key #{key_to_try_index + 1} has exceeded its quota. Trying next key...")
-                continue
-            else:
-                print(f"An unexpected error occurred with Gemini API Key #{key_to_try_index + 1}: {e}")
-                return None
+        print("Successfully translated and styled with OpenRouter.")
+        return styled_content
 
-    print("All available Gemini API keys have exceeded their quotas. Skipping translation.")
-    current_key_index = len(valid_keys) # Mark all keys as used
-    return None
+    except requests.exceptions.RequestException as e:
+        print(f"An error occurred calling OpenRouter API: {e}")
+        return None
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        print(f"Error parsing response from OpenRouter: {e}")
+        # Also print the raw content to help debug
+        print(f"Raw response content: {response.text}")
+        return None
 
 def post_to_facebook(article_data):
     page_id = os.getenv("FACEBOOK_PAGE_ID")
