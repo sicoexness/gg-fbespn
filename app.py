@@ -53,7 +53,7 @@ def translate_and_style_article(article):
                 "Content-Type": "application/json"
             },
             data=json.dumps({
-                "model": "openai/gpt-3.5-turbo", # Using a standard, reliable model
+                "model": "openai/gpt-oss-20b:free", # Using the specified free model from user's cURL
                 "messages": [
                     {"role": "user", "content": prompt}
                 ]
